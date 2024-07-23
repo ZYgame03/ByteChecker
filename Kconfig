@@ -1,0 +1,20 @@
+#
+# 
+# 
+#
+
+config KFENCE
+	tristate "kfence for nuttx"
+	default n
+	---help---
+		Enable the kfence for nuttx
+
+if KFENCE
+
+config KFENCE_NUM_OBJECTS
+	int "The number of metadata"
+	default "10"
+	---help---
+		NULL
+
+endif
