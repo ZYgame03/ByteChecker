@@ -8,7 +8,7 @@
 #define ALIGN_DOWN(x, a) (((x) - ((a) - 1)) & ~((typeof(x))(a) - 1)) 
 
 // canary相关定义
-#define KFENCE_CANARY_PATTERN(addr) (0xaa ^ ((unsigned long)(addr) & 0x7))
+#define KFENCE_CANARY_PATTERN(addr) ((uint8_t)0xa3 ^ (uint8_t)((unsigned long)(addr) & 0x7))
 
 // 元数据状态
 enum kfence_object_state {
@@ -53,9 +53,10 @@ struct kfence_metadata {
 
 // kfence异常类型
 enum kfence_error_type {
-  KFENCE_ERROR_OOB,           /* 越界访问 */
-  KFENCE_ERROR_UAF,           /* 释放后再次使用 */
-  KFENCE_ERROR_DoubleFree,    /* 二次释放 */
+  KFENCE_ERROR_OOB,   /* 越界访问 */
+  KFENCE_ERROR_UAF,   /* 释放后再次使用 */
+  KFENCE_ERROR_DF,    /* 二次释放 */
+  KFENCE_ERROR_INVALID_FREE, 
 };
 
 

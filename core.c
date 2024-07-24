@@ -15,7 +15,7 @@
 
 #include "kfence.h"
 
-#define KFENCE_PAGE_SIZE (4096)
+#define KFENCE_PAGE_SIZE (0x10)
 #define KFENCE_POOL_SIZE ((CONFIG_KFENCE_NUM_OBJECTS + 1) * 2 * KFENCE_PAGE_SIZE)
 
 // 确保一次写入操作
@@ -32,6 +32,21 @@ static struct list_node kfence_freelist;
 
 // kfence开启状态
 static bool kfence_enabled;
+
+static void print(unsigned char *addr, int l)
+{
+	int count = 0;
+
+	for (int i = 0; i < l; i++)
+	{
+		printf("%02x", addr[i]);
+		count++;
+		if(count == 16){
+			count = 0;
+			printf("\n");
+		}
+	}
+}
 
 static bool is_kfence_address(unsigned long *addr)
 {
@@ -73,33 +88,33 @@ static inline bool set_canary_byte(uint8_t *addr)
 static inline bool check_canary_byte(uint8_t *addr)
 {
 	if (*addr == KFENCE_CANARY_PATTERN(addr))
-	{
-		syslog(LOG_INFO, "正确");
 		return true;
-	}
 
-	// kfence_report error();
-	syslog(LOG_ERR, "[ canary ]canary验证失败，可能发生越界");
 	return false;
 }
 
 static inline void for_each_canary(const struct kfence_metadata *meta, bool (*fn)(uint8_t *))
 {
-
-	const unsigned long pageaddr = meta->addr;
 	unsigned long addr;
 
-	for (addr = pageaddr; addr < meta->addr; addr++)
+	// 左越界检测
+	// for (addr = meta->addr; addr < meta->addr; addr++)
+	// {
+	// 	if (!fn((uint8_t *)addr))
+	// 		break;
+	// }
+	// print(meta->addr, 32);
+
+	// 右越界检测
+	for (addr = meta->addr + meta->size; addr < meta->addr + KFENCE_PAGE_SIZE; addr++)
 	{
-		if (!fn((uint8_t *)addr))
+		if (!fn((uint8_t *)addr)){
+			kfence_report_error(addr, meta, KFENCE_ERROR_OOB);
 			break;
+		}
 	}
 
-	for (addr = meta->addr + meta->size; addr < pageaddr + KFENCE_PAGE_SIZE; addr++)
-	{
-		if (!fn((uint8_t *)addr))
-			break;
-	}
+	// print(meta->addr, 32);
 }
 
 /* ===对内存设置/取消保护=====================================*/
@@ -169,7 +184,7 @@ static void *kfence_guarded_alloc(size_t size)
 	metadata_update_state(meta, KFENCE_OBJECT_ALLOCATED);
 	meta->size = size;
 
-	// for_each_canary(meta, set_canary_byte);
+	for_each_canary(meta, set_canary_byte);
 	// can_kfence_alloc = false;
 
 	syslog(LOG_INFO, "[ g_alloc ]申请成功，地址为0x%lx", addr);
@@ -182,15 +197,14 @@ static void kfence_guarded_free(void *addr, struct kfence_metadata *meta)
 	if (meta->state != KFENCE_OBJECT_ALLOCATED || meta->addr != (unsigned long)addr) 
 	{
 		// kfence_report_error((unsigned long)addr, false, NULL, meta, KFENCE_ERROR_INVALID_FREE);
-		syslog(LOG_ERR, "非法释放\n");
+		kfence_report_error(addr, meta, KFENCE_ERROR_INVALID_FREE);
 		return;
 	}
 
 	metadata_update_state(meta, KFENCE_OBJECT_FREED);
 	for_each_canary(meta, check_canary_byte);
 
-
-	explicit_bzero(addr, meta->size);
+	// memset(addr, 0, meta->size);
 	list_add_tail(&meta->list, &kfence_freelist);
 
 	kfence_protect((unsigned long)addr);
@@ -203,7 +217,7 @@ static void kfence_guarded_free(void *addr, struct kfence_metadata *meta)
 // 内存分配
 unsigned long *kfence_alloc(size_t size)
 {
-	syslog(LOG_INFO, "[ alloc ]开始申请内存...");
+	syslog(LOG_INFO, "[ alloc ]开始申请内存...(大小：%x)", size);
 	// 检查kfence是否开启
 	if (!kfence_enabled)
 		return NULL;
@@ -308,6 +322,53 @@ void kfence_init(void)
 	syslog(LOG_INFO, "---------------------------------\n");
 }
 
+/*===报告============================================*/
+
+void kfence_report_error(unsigned long addr, const struct kfence_metadata *meta, enum kfence_error_type type)
+{
+	// unsigned long stack_entries[KFENCE_STACK_DEPTH] = { 0 };
+	// int num_stack_entries = stack_trace_save(stack_entries, KFENCE_STACK_DEPTH, 1);
+	// int skipnr = get_stack_skipnr(stack_entries, num_stack_entries, &type);
+	const int object_index = meta ? meta - kfence_metadata_list + 1 : -1;
+	syslog(LOG_ERR, "addr:%lx,metaaddr:%lx",addr, meta->addr);
+
+	syslog(LOG_ERR, "==================================================");
+	switch (type)
+	{
+	case KFENCE_ERROR_OOB:
+	{	
+		const bool left_of_object = addr < meta->addr;
+
+		syslog(LOG_ERR, "问题：越界访问");
+		syslog(LOG_ERR, "在位置0x%lx的%s侧",addr, left_of_object ? "左" : "右");
+		syslog(LOG_ERR, "索引值%d", object_index);
+		break;
+	}
+	case KFENCE_ERROR_UAF:
+	{
+		syslog(LOG_ERR, "问题：释放后使用");
+		syslog(LOG_ERR, "在位置0x%lx处",addr);
+		syslog(LOG_ERR, "索引值%d", object_index);
+		break;
+	}
+	case KFENCE_ERROR_DF:
+	{
+		syslog(LOG_ERR, "问题：重复释放");
+		syslog(LOG_ERR, "在位置0x%lx处",addr);
+		syslog(LOG_ERR, "索引值%d", object_index);
+		break;
+	}
+	case KFENCE_ERROR_INVALID_FREE:
+	{
+		syslog(LOG_ERR, "问题：非法释放");
+		syslog(LOG_ERR, "在位置0x%lx处",addr);
+		syslog(LOG_ERR, "索引值%d", object_index);
+		break;
+	}
+	}
+	syslog(LOG_ERR, "==================================================");
+}
+
 /*===运行============================================*/
 
 int main(int argc, FAR char *argv[])
@@ -315,12 +376,16 @@ int main(int argc, FAR char *argv[])
 	kfence_init();
 	printf("---------------测试----------------\n");
 	unsigned long a;
-	a = kfence_alloc(2048);
-	for(int i = 0; i < 8; i++)
-		kfence_alloc(2048);
-	kfence_alloc(8192);
+	a = kfence_alloc(0x1);
+	uint32_t *b = a;
+	*b = 0x1000;
+	for(int i = 0; i < 11; i++)
+		kfence_alloc(0x8);
+	kfence_alloc(0x20);
 	syslog(LOG_INFO, "[ test ]a值为0x%lx", a);
 	kfence_free(a);
-	kfence_alloc(2048);
+	kfence_alloc(0x3);
+	kfence_free(a);
+	print(__kfence_pool, KFENCE_POOL_SIZE);
 	return 0;
 }
