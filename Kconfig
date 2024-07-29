@@ -3,18 +3,20 @@
 # 
 #
 
-config KFENCE
-	tristate "kfence for nuttx"
+config BYTECHECKER
+	bool "enable bytechecker"
 	default n
 	---help---
-		Enable the kfence for nuttx
+		Enable bytechecker
 
-if KFENCE
+if BYTECHECKER
 
-config KFENCE_NUM_OBJECTS
+config BYTECHECKER_NUM_OBJECTS
 	int "The number of metadata"
 	default "10"
-	---help---
-		NULL
+
+config BYTECHECKER_PAGE_SIZE
+	int "The size of memory size"
+	default "1024"
 
 endif
