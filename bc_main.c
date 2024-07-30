@@ -90,37 +90,37 @@ void bytechecker_report_error(unsigned long addr, const struct bytechecker_metad
 	// int skipnr = get_stack_skipnr(stack_entries, num_stack_entries, &type);
 	const int object_index = meta ? meta - bytechecker_metadata_list + 1 : -1;
 
-	syslog(LOG_ERR, "==================================================");
+	syslog(LOG_ERR, "==================================================\n");
 	switch (type)
 	{
 	case BYTECHECKER_ERROR_OOB:
 	{	
 		const bool left_of_object = addr < meta->addr;
 
-		syslog(LOG_ERR, "问题：越界访问");
-		syslog(LOG_ERR, "在位置%d处，地址0x%lx的%s侧", object_index, addr, left_of_object ? "左" : "右");
+		syslog(LOG_ERR, "问题：越界访问\n");
+		syslog(LOG_ERR, "在位置%d处，地址0x%lx的%s侧\n", object_index, addr, left_of_object ? "左" : "右");
 		break;
 	}
 	case BYTECHECKER_ERROR_UAF:
 	{
-		syslog(LOG_ERR, "问题：释放后使用");
-		syslog(LOG_ERR, "在位置%d处,地址0x%lx",object_index, addr);
+		syslog(LOG_ERR, "问题：释放后使用\n");
+		syslog(LOG_ERR, "在位置%d处,地址0x%lx\n",object_index, addr);
 		break;
 	}
 	case BYTECHECKER_ERROR_DF:
 	{
-		syslog(LOG_ERR, "问题：重复释放");
-		syslog(LOG_ERR, "在位置%d处,地址0x%lx",object_index, addr);
+		syslog(LOG_ERR, "问题：重复释放\n");
+		syslog(LOG_ERR, "在位置%d处,地址0x%lx\n",object_index, addr);
 		break;
 	}
 	case BYTECHECKER_ERROR_INVALID_FREE:
 	{
-		syslog(LOG_ERR, "问题：非法释放");
-		syslog(LOG_ERR, "在位置%d处,地址0x%lx",object_index, addr);
+		syslog(LOG_ERR, "问题：非法释放\n");
+		syslog(LOG_ERR, "在位置%d处,地址0x%lx\n",object_index, addr);
 		break;
 	}
 	}
-	syslog(LOG_ERR, "==================================================");
+	syslog(LOG_ERR, "==================================================\n");
 }
 
 /*===canary================================================*/
@@ -387,7 +387,7 @@ void *bytechecker_task(int argc, char *argv)
 	}
 
 	real_free(__bytechecker_pool);
-	syslog(LOG_INFO, "[ bytechecker ]bytechecker已停止");
+	syslog(LOG_INFO, "[ bytechecker ]bytechecker已停止\n");
 	
 	running = 0;
 	return NULL;
@@ -396,7 +396,7 @@ void *bytechecker_task(int argc, char *argv)
 int start_bytechecker_task(void)
 {
 	if (running){
-		syslog(LOG_INFO, "[ bytechecker ]bytechecker正在运行");
+		syslog(LOG_INFO, "[ bytechecker ]bytechecker正在运行\n");
 		return -1;
 	}
 
@@ -404,7 +404,7 @@ int start_bytechecker_task(void)
 
 	int ret = task_create("bytechecker", 50, 1000, (main_t)bytechecker_task, NULL);
 	if (ret == 0){
-		syslog(LOG_ERR, "[ bytechecker ]bytechecker启动失败");
+		syslog(LOG_ERR, "[ bytechecker ]bytechecker启动失败\n");
 		running = 0;
 		return -1;
 	}
@@ -416,7 +416,7 @@ int start_bytechecker_task(void)
 int stop_bytechecker_task(void)
 {
 	if (!running){
-		syslog(LOG_INFO, "[ bytechecker ]bytechecker未运行");
+		syslog(LOG_INFO, "[ bytechecker ]bytechecker未运行\n");
 		return -1;
 	}
 
@@ -427,8 +427,8 @@ int stop_bytechecker_task(void)
 int main(int argc, char *argv[])
 {
 	if (argc < 2){
-		syslog(LOG_INFO, "[ bytechecker ]输入bytechecker start启动bytechecker");
-		syslog(LOG_INFO, "[ bytechecker ]输入bytechecker stop关闭bytechecker");
+		syslog(LOG_INFO, "[ bytechecker ]输入bytechecker start启动bytechecker\n");
+		syslog(LOG_INFO, "[ bytechecker ]输入bytechecker stop关闭bytechecker\n");
 		return -1;
 	}
 

@@ -1,10 +1,5 @@
-#
-# 
-# 
-#
-
 config BYTECHECKER
-	bool "enable bytechecker"
+	bool "ByteChecker"
 	default n
 	---help---
 		Enable bytechecker
@@ -16,7 +11,7 @@ config BYTECHECKER_NUM_OBJECTS
 	default "10"
 
 config BYTECHECKER_PAGE_SIZE
-	int "The size of memory size"
+	int "The size of memory"
 	default "1024"
 
 endif
