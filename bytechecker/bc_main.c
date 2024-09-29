@@ -1,7 +1,10 @@
 #include <stdio.h>
 #include <syslog.h>
-#include <nuttx/mm/mm.h>
 #include <string.h>
+#include <time.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <nuttx/mm/mm.h>
 #include <nuttx/kmalloc.h>
 #include <nuttx/spinlock.h>
 #include <nuttx/wqueue.h>
@@ -11,10 +14,11 @@
 #include <nuttx/irq.h>
 #include <nuttx/config.h>
 #include <nuttx/arch.h>
-#include <stdint.h>
+
 
 #define BYTECHECKER_PAGE_SIZE CONFIG_BYTECHECKER_PAGE_SIZE
 #define BYTECHECKER_POOL_SIZE ((CONFIG_BYTECHECKER_NUM_OBJECTS * 2 + 1)* BYTECHECKER_PAGE_SIZE)
+#define ALLOC_GATE (CONFIG_BYTECHECKER_ALLOC_GATE / 1000)
 
 // 确保一次写入操作
 #define WRITE_ONCE(x, val) (*(volatile typeof(x) *)&(x) = (val))
@@ -32,22 +36,30 @@ static struct list_node bytechecker_freelist;
 static bool bytechecker_enabled;
 static bool running = false;
 
-// 门限
+// 门
 static bool bytechecker_can_alloc = false;
 
+timer_t g_timerid;
+
 // 打印内存数据，用于测试输出
-// static void print(unsigned char *addr, int l)
-// {
-// 	int count = 0;
-// 	for (int i = 0; i < l; i++){
-// 		printf("%02x", addr[i]);
-// 		count++;
-// 		if(count == 16){
-// 			count = 0;
-// 			printf("\n");
-// 		}
-// 	}
-// }
+static void print(unsigned char *addr, int l)
+{
+	int count = 0;
+	for (int i = 0; i < l; i++){
+		printf("%02x", addr[i]);
+		count++;
+		if(count == 16){
+			count = 0;
+			printf("\n");
+		}
+	}
+}
+
+const int bytechecker_info()
+{
+	print(__bytechecker_pool, BYTECHECKER_POOL_SIZE);
+	return -1;
+}
 
 // 检查地址是否合法
 static bool is_bytechecker_address(unsigned long *addr)
@@ -85,9 +97,6 @@ static inline unsigned long metadata_to_pageaddr(const struct bytechecker_metada
 
 void bytechecker_report_error(unsigned long addr, const struct bytechecker_metadata *meta, enum bytechecker_error_type type)
 {
-	// unsigned long stack_entries[bytechecker_STACK_DEPTH] = { 0 };
-	// int num_stack_entries = stack_trace_save(stack_entries, bytechecker_STACK_DEPTH, 1);
-	// int skipnr = get_stack_skipnr(stack_entries, num_stack_entries, &type);
 	const int object_index = meta ? meta - bytechecker_metadata_list + 1 : -1;
 
 	syslog(LOG_ERR, "==================================================\n");
@@ -120,6 +129,7 @@ void bytechecker_report_error(unsigned long addr, const struct bytechecker_metad
 		break;
 	}
 	}
+
 	syslog(LOG_ERR, "==================================================\n");
 }
 
@@ -169,70 +179,50 @@ static inline void for_each_canary(const struct bytechecker_metadata *meta, bool
 	}
 }
 
-/* ===计时任务=====================================================*/
+/* ===计时任务===================================================== */
 
-// static void alloc_gate_callback(int argc, uint32_t arg, ...)
-// {
-// 	syslog(LOG_INFO, "[ bytechecker ]可以申请内存");
-// 	bytechecker_can_alloc = true;
-// }
+static void alloc_gate_callback(int sig)
+{
+	bytechecker_can_alloc = true;
+}
 
-// static void start_timer(void)
-// {
-// 	struct timer_lowerhalf_s *bytechecker_timer;
-// 	struct timer_notify_s notify;
-// 	int ret;
+static void start_timer(void)
+{
+	struct sigevent sev;
+	struct itimerspec its;
+	struct sigaction sa;
 
-// 	bytechecker_timer = timer_initialize(0, NULL);
-// 	if (!bytechecker_timer)
-// 	{
-// 		syslog(LOG_ERR, "[ bytechecker ]定时器初始化失败");
-// 		return -1;
-// 	}
+	sa.sa_flags = SA_SIGINFO;
+	sa.sa_sigaction = alloc_gate_callback;
+	sigemptyset(&sa.sa_mask);
+	
+	if(sigaction(SIGRTMIN, &sa, NULL) == -1){
+		return 0;
+	}
 
-// 	notify.callback = alloc_gate_callback;
-// 	notify.arg = 0;
-// 	ret = TIMER_IOCTL(bytechecker_timer, TCIOC_NOTIFICATION, (unsigned long)((uintptr_t)&notify));
-// 	if (ret < 0)
-// 	{
-// 		syslog(LOG_ERR, "[ bytechecker ]定时器设置失败");
-// 		return -1;
-// 	}
+	sev.sigev_notify = SIGEV_SIGNAL;
+	sev.sigev_signo = SIGRTMIN;
+	sev.sigev_value.sival_ptr = &g_timerid;
 
-// 	struct timer_settime_s timer_settime;
-// 	timer_settime.flag = 0;
-// 	timer_settime.value.it_value.tv_sec = 5;
-// 	timer_settime.value.it_value.nsec = 0;
-// 	timer_settime.value.it_interval.tv_sec = 5;
-// 	timer_settime.value.it_interval.tv_nsec = 0;
+	if(timer_create(CLOCK_REALTIME, &sev, &g_timerid) == -1){
+		return 0;
+	}
 
-// 	ret = TIMER_IOCTL(bytechecker_timer, TCIOC_SETTIME, (unsigned long)((uintptr_t)&timer_settime));
-// 	if (ret < 0)
-// 	{
-// 		syslog(LOG_ERR, "[ bytechecker ]定时器设置失败");
-// 		return -1;
-// 	}
+	its.it_value.tv_sec = ALLOC_GATE;
+	its.it_value.tv_nsec = 0;
+	its.it_interval.tv_sec = ALLOC_GATE;
+	its.it_interval.tv_nsec = 0;
 
-// 	ret = TIMER_IOCTL(bytechecker_timer, TCIOC_START, 0);
-// 	if (ret < 0)
-// 	{
-// 		syslog(LOG_ERR, "[ bytechecker ]定时器启动失败");
-// 		return -1;
-// 	}
-// }
+	if (timer_settime(g_timerid, 0, &its, NULL) == -1){
+		return 0;
+	}
+}
 
 /* ===bytechecker内存申请与释放=========================================== */
 
 /* 更新metadata状态 */
-/* 栈相关操作函数有待研究 */
 static void metadata_update_state(struct bytechecker_metadata *meta, enum bytechecker_object_state next)
 {
-	// struct bytechecker_track *track =
-	// 	next == bytechecker_OBJECT_FREED ? &meta->free_track : &meta->alloc_track;
-
-	// track->num_stack_entries = stack_trace_save(track->stack_entries, bytechecker_STACK_DEPTH, 1);
-	// track->pid = task_pid_nr(current);
-
 	WRITE_ONCE(meta->state, next);
 }
 
@@ -295,8 +285,8 @@ void *bytechecker_alloc(FAR const char *file, int line, size_t size)
 		return real_malloc(size);
 
 	// 检查是否可以申请内存（计时器相关）
-	// if (!bytechecker_can_alloc)
-	// 	return real_malloc(size);
+	if (!bytechecker_can_alloc)
+		return real_malloc(size);
 
 	// 检查申请的内存大小
 	if (size > BYTECHECKER_PAGE_SIZE)
@@ -368,7 +358,7 @@ void bytechecker_init(void)
         return;
 	}
 
-	// start_timer();
+	start_timer();
 		
     // 表示bytechecker已使能
     WRITE_ONCE(bytechecker_enabled, true);
@@ -437,5 +427,5 @@ int main(int argc, char *argv[])
 	else if (strcmp(argv[1], "stop")==0)
 		return stop_bytechecker_task();
 	else
-		return -1;
+		return bytechecker_info();
 }

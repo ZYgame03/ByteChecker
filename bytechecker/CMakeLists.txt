@@ -1,4 +1,3 @@
-
 if(CONFIG_BYTECHECKER)
   nuttx_add_application(
     NAME
